@@ -80,7 +80,7 @@ class SummerPlannerBuilder:
     def seed_master_calendar(self, db_id: str) -> None:
         for name, start, end, status in MASTER_CALENDAR_ENTRIES:
             self.notion.pages.create(
-                parent={"database_id": db_id},
+                parent={"type": "database_id", "database_id": db_id},
                 properties={
                     "Name": {"title": rich_text(name)},
                     "Date Range": {"date": {"start": start, "end": end}},
@@ -153,7 +153,7 @@ class SummerPlannerBuilder:
     def seed_activities(self, db_id: str) -> None:
         for name, atype, dur, cost, status, energy, weather, people in ACTIVITIES_ENTRIES:
             self.notion.pages.create(
-                parent={"database_id": db_id},
+                parent={"type": "database_id", "database_id": db_id},
                 properties={
                     "Activity Name": {"title": rich_text(name)},
                     "Type": {"select": {"name": atype}},
@@ -208,7 +208,7 @@ class SummerPlannerBuilder:
     def seed_availability(self, db_id: str) -> None:
         for (week, person), (conflict, slots) in AVAILABILITY_CONFLICTS_MAP.items():
             self.notion.pages.create(
-                parent={"database_id": db_id},
+                parent={"type": "database_id", "database_id": db_id},
                 properties={
                     "Week": {"select": {"name": week}},
                     "Person": {"select": {"name": person}},
@@ -250,7 +250,7 @@ class SummerPlannerBuilder:
     def seed_places(self, db_id: str) -> None:
         for name, loc, ptype, dist, cost, link, rating in PLACES_ENTRIES:
             self.notion.pages.create(
-                parent={"database_id": db_id},
+                parent={"type": "database_id", "database_id": db_id},
                 properties={
                     "Name": {"title": rich_text(name)},
                     "Location": {"rich_text": rich_text(loc)},
@@ -318,7 +318,7 @@ class SummerPlannerBuilder:
     def seed_bucket_list(self, db_id: str) -> None:
         for item, priority, cats, status, people in BUCKET_LIST_ENTRIES:
             self.notion.pages.create(
-                parent={"database_id": db_id},
+                parent={"type": "database_id", "database_id": db_id},
                 properties={
                     "Item": {"title": rich_text(item)},
                     "Priority": {"select": {"name": priority}},
@@ -380,7 +380,7 @@ class SummerPlannerBuilder:
     def seed_budget(self, db_id: str) -> None:
         for item, cat, planned, actual, trip, cost_level in BUDGET_ENTRIES:
             self.notion.pages.create(
-                parent={"database_id": db_id},
+                parent={"type": "database_id", "database_id": db_id},
                 properties={
                     "Item": {"title": rich_text(item)},
                     "Category": {"select": {"name": cat}},
@@ -421,7 +421,7 @@ class SummerPlannerBuilder:
     def seed_highlights(self, db_id: str) -> None:
         for title, date, people, loc, rating, notes in HIGHLIGHTS_ENTRIES:
             self.notion.pages.create(
-                parent={"database_id": db_id},
+                parent={"type": "database_id", "database_id": db_id},
                 properties={
                     "Title": {"title": rich_text(title)},
                     "Date": {"date": {"start": date}},
@@ -434,22 +434,13 @@ class SummerPlannerBuilder:
         print(f"  ✓ Seeded {len(HIGHLIGHTS_ENTRIES)} highlight entries.")
 
     def create_linked_view(self, page_id: str, database_id: str) -> None:
-        block = {
-            "object": "block",
-            "type": "linked_to_database",
-            "linked_to_database": {"database_id": database_id},
-        }
-        try:
-            self.notion.blocks.children.append(block_id=page_id, children=[block])
-        except APIResponseError as exc:
-            print(
-                f"  ⚠ Could not insert linked view (linked_to_database): {exc.code}. "
-                "Inserting placeholder paragraph instead."
-            )
-            self.notion.blocks.children.append(
-                block_id=page_id,
-                children=[paragraph_block(f"[Link to database: {database_id}]")],
-            )
+        # linked_to_database insertion is not consistently supported by the public API.
+        # Add a plain URL reference to avoid noisy validation errors.
+        notion_url = f"https://www.notion.so/{database_id.replace('-', '')}"
+        self.notion.blocks.children.append(
+            block_id=page_id,
+            children=[paragraph_block(f"Open database: {notion_url}")],
+        )
 
     def add_relations(
         self,
@@ -488,10 +479,7 @@ class SummerPlannerBuilder:
         top_blocks = [
             heading_block(1, "Summer 2026 Dashboard 🦆"),
             callout_block(
-                "This is your planning hub for Summer 2026 - scheduling, logistics, "
-                "activities, places, and budget all in one place.\n"
-                "Vibe markers: 🦆 🦮 🔥 👽 🫧 4️⃣ 🕓 🐶",
-                "🌴",
+                "This is for planning the BEST Summer EVER 😎"
             ),
             heading_block(2, "Summer 2026 Goals 🔥"),
             bulleted_block("Number of weekend outings (target: 10+)."),
