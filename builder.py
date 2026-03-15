@@ -29,7 +29,6 @@ from sample_data import (
     PLACES_ENTRIES,
 )
 
-
 def format_api_error(exc: APIResponseError) -> str:
     """Return a stable error string across notion-client versions."""
     code = getattr(exc, "code", "unknown_error")
@@ -40,6 +39,35 @@ class SummerPlannerBuilder:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.notion = Client(auth=settings.notion_token)
+
+    def _get_data_source_id(self, db_id: str) -> str:
+        db = self.notion.databases.retrieve(database_id=db_id)
+        data_sources = db.get("data_sources", [])
+        if not data_sources:
+            raise ValueError(f"No data source found for database {db_id}")
+        return data_sources[0]["id"]
+
+    def _get_title_property_name(self, db_id: str) -> str:
+        data_source_id = self._get_data_source_id(db_id)
+        ds = self.notion.data_sources.retrieve(data_source_id=data_source_id)
+        props = ds.get("properties", {})
+        for prop_name, prop_meta in props.items():
+            if prop_meta.get("type") == "title":
+                return prop_name
+        return "Name"
+
+    def _ensure_custom_properties(
+        self,
+        db_id: str,
+        requested_properties: dict[str, Any],
+    ) -> None:
+        custom_only: dict[str, Any] = {
+            key: value for key, value in requested_properties.items() if "title" not in value
+        }
+        if not custom_only:
+            return
+        data_source_id = self._get_data_source_id(db_id)
+        self.notion.data_sources.update(data_source_id=data_source_id, properties=custom_only)
 
     def create_main_page(self) -> str:
         print("Creating main page: Summer 2026 Planner ...")
@@ -54,108 +82,118 @@ class SummerPlannerBuilder:
         return page_id
 
     def create_master_calendar(self, page_id: str) -> str:
+        properties = {
+            "Name": {"title": {}},
+            "Date Range": {"date": {}},
+            "Status": {
+                "select": {
+                    "options": [
+                        select_option("Planned", "blue"),
+                        select_option("Booked", "green"),
+                        select_option("Done", "gray"),
+                    ]
+                }
+            },
+            "Assigned To": {"people": {}},
+            "Notes": {"rich_text": {}},
+        }
         db = self.notion.databases.create(
             parent={"type": "page_id", "page_id": page_id},
             title=rich_text("Master Calendar 🕓"),
             icon={"type": "emoji", "emoji": "📅"},
             is_inline=True,
-            properties={
-                "Name": {"title": {}},
-                "Date Range": {"date": {}},
-                "Status": {
-                    "select": {
-                        "options": [
-                            select_option("Planned", "blue"),
-                            select_option("Booked", "green"),
-                            select_option("Done", "gray"),
-                        ]
-                    }
-                },
-                "Assigned To": {"people": {}},
-                "Notes": {"rich_text": {}},
-            },
+            properties=properties,
         )
-        return db["id"]
+        db_id = db["id"]
+        self._ensure_custom_properties(db_id, properties)
+        return db_id
 
     def seed_master_calendar(self, db_id: str) -> None:
+        data_source_id = self._get_data_source_id(db_id)
+        title_key = self._get_title_property_name(db_id)
         for name, start, end, status in MASTER_CALENDAR_ENTRIES:
             self.notion.pages.create(
-                parent={"type": "database_id", "database_id": db_id},
+                parent={"data_source_id": data_source_id},
                 properties={
-                    "Name": {"title": rich_text(name)},
-                    "Date Range": {"date": {"start": start, "end": end}},
-                    "Status": {"select": {"name": status}},
+                title_key: {"title": rich_text(name)},
+                "Date Range": {"date": {"start": start, "end": end}},
+                "Status": {"select": {"name": status}},
                 },
             )
         print(f"  ✓ Seeded {len(MASTER_CALENDAR_ENTRIES)} calendar entries.")
 
     def create_activities_db(self, page_id: str) -> str:
+        properties = {
+            "Activity Name": {"title": {}},
+            "Type": {
+                "select": {
+                    "options": [
+                        select_option("Outdoor", "green"),
+                        select_option("Indoor", "blue"),
+                        select_option("Event", "purple"),
+                        select_option("Relax", "yellow"),
+                    ]
+                }
+            },
+            "Duration": {"number": {"format": "number"}},
+            "Cost": {"number": {"format": "dollar"}},
+            "Status": {
+                "select": {
+                    "options": [
+                        select_option("Planned", "blue"),
+                        select_option("In Progress", "yellow"),
+                        select_option("Done", "green"),
+                    ]
+                }
+            },
+            "Energy": {
+                "select": {
+                    "options": [
+                        select_option("Low", "green"),
+                        select_option("Medium", "yellow"),
+                        select_option("High", "red"),
+                    ]
+                }
+            },
+            "Weather": {
+                "select": {
+                    "options": [
+                        select_option("Hot day", "orange"),
+                        select_option("Cool evening", "blue"),
+                        select_option("Any", "gray"),
+                    ]
+                }
+            },
+            "People": {
+                "multi_select": {
+                    "options": [
+                        select_option("Solo", "gray"),
+                        select_option("You + BF", "pink"),
+                        select_option("Friends", "purple"),
+                        select_option("Family", "green"),
+                    ]
+                }
+            },
+        }
         db = self.notion.databases.create(
             parent={"type": "page_id", "page_id": page_id},
             title=rich_text("Activities 🔥"),
             icon={"type": "emoji", "emoji": "🏃"},
             is_inline=True,
-            properties={
-                "Activity Name": {"title": {}},
-                "Type": {
-                    "select": {
-                        "options": [
-                            select_option("Outdoor", "green"),
-                            select_option("Indoor", "blue"),
-                            select_option("Event", "purple"),
-                            select_option("Relax", "yellow"),
-                        ]
-                    }
-                },
-                "Duration": {"number": {"format": "number"}},
-                "Cost": {"number": {"format": "dollar"}},
-                "Status": {
-                    "select": {
-                        "options": [
-                            select_option("Planned", "blue"),
-                            select_option("In Progress", "yellow"),
-                            select_option("Done", "green"),
-                        ]
-                    }
-                },
-                "Energy": {
-                    "select": {
-                        "options": [
-                            select_option("Low", "green"),
-                            select_option("Medium", "yellow"),
-                            select_option("High", "red"),
-                        ]
-                    }
-                },
-                "Weather": {
-                    "select": {
-                        "options": [
-                            select_option("Hot day", "orange"),
-                            select_option("Cool evening", "blue"),
-                            select_option("Any", "gray"),
-                        ]
-                    }
-                },
-                "People": {
-                    "multi_select": {
-                        "options": [
-                            select_option("Solo", "gray"),
-                            select_option("You + BF", "pink"),
-                            select_option("Friends", "purple"),
-                            select_option("Family", "green"),
-                        ]
-                    }
-                },
-            },
+            properties=properties,
         )
-        return db["id"]
+        db_id = db["id"]
+        self._ensure_custom_properties(db_id, properties)
+        return db_id
 
     def seed_activities(self, db_id: str) -> None:
+        data_source_id = self._get_data_source_id(db_id)
+        title_key = self._get_title_property_name(db_id)
         for name, atype, dur, cost, status, energy, weather, people in ACTIVITIES_ENTRIES:
             self.notion.pages.create(
-                parent={"type": "database_id", "database_id": db_id},
+                parent={"data_source_id": data_source_id},
                 properties={
-                    "Activity Name": {"title": rich_text(name)},
+                    title_key: {"title": rich_text(name)},
                     "Type": {"select": {"name": atype}},
                     "Duration": {"number": dur},
                     "Cost": {"number": cost},
@@ -168,48 +206,54 @@ class SummerPlannerBuilder:
         print(f"  ✓ Seeded {len(ACTIVITIES_ENTRIES)} activity entries.")
 
     def create_availability_db(self, page_id: str) -> str:
+        properties = {
+            "Week": {
+                "select": {
+                    "options": [
+                        select_option("Typical Week", "blue"),
+                        select_option("Week with Overtime", "yellow"),
+                    ]
+                }
+            },
+            "Person": {
+                "select": {
+                    "options": [
+                        select_option("You", "green"),
+                        select_option("BF (TBD)", "purple"),
+                    ]
+                }
+            },
+            "Free Slots": {
+                "multi_select": {
+                    "options": [
+                        select_option("Mon-Thu After Work", "yellow"),
+                        select_option("Fri After Work", "yellow"),
+                        select_option("Saturday", "green"),
+                        select_option("Sunday", "blue"),
+                    ]
+                }
+            },
+            "Conflicts": {"rich_text": {}},
+        }
         db = self.notion.databases.create(
             parent={"type": "page_id", "page_id": page_id},
             title=rich_text("Availability 4️⃣"),
             icon={"type": "emoji", "emoji": "📆"},
             is_inline=True,
-            properties={
-                "Week": {
-                    "select": {
-                        "options": [
-                            select_option("Typical Week", "blue"),
-                            select_option("Week with Overtime", "yellow"),
-                        ]
-                    }
-                },
-                "Person": {
-                    "select": {
-                        "options": [
-                            select_option("You", "green"),
-                            select_option("BF (TBD)", "purple"),
-                        ]
-                    }
-                },
-                "Free Slots": {
-                    "multi_select": {
-                        "options": [
-                            select_option("Mon-Thu After Work", "yellow"),
-                            select_option("Fri After Work", "yellow"),
-                            select_option("Saturday", "green"),
-                            select_option("Sunday", "blue"),
-                        ]
-                    }
-                },
-                "Conflicts": {"rich_text": {}},
-            },
+            properties=properties,
         )
-        return db["id"]
+        db_id = db["id"]
+        self._ensure_custom_properties(db_id, properties)
+        return db_id
 
     def seed_availability(self, db_id: str) -> None:
+        data_source_id = self._get_data_source_id(db_id)
+        title_key = self._get_title_property_name(db_id)
         for (week, person), (conflict, slots) in AVAILABILITY_CONFLICTS_MAP.items():
             self.notion.pages.create(
-                parent={"type": "database_id", "database_id": db_id},
+                parent={"data_source_id": data_source_id},
                 properties={
+                    title_key: {"title": rich_text(f"{week} - {person}")},
                     "Week": {"select": {"name": week}},
                     "Person": {"select": {"name": person}},
                     "Free Slots": {"multi_select": [{"name": s} for s in slots]},
@@ -219,40 +263,45 @@ class SummerPlannerBuilder:
         print(f"  ✓ Seeded {len(AVAILABILITY_CONFLICTS_MAP)} availability entries.")
 
     def create_places_db(self, page_id: str) -> str:
+        properties = {
+            "Name": {"title": {}},
+            "Location": {"rich_text": {}},
+            "Type": {
+                "select": {
+                    "options": [
+                        select_option("Beach", "blue"),
+                        select_option("Park", "green"),
+                        select_option("City", "purple"),
+                        select_option("Trail", "brown"),
+                        select_option("Cafe", "orange"),
+                        select_option("Other", "gray"),
+                    ]
+                }
+            },
+            "Distance": {"number": {"format": "number"}},
+            "Cost": {"number": {"format": "dollar"}},
+            "Link": {"url": {}},
+            "Rating": {"number": {"format": "number"}},
+        }
         db = self.notion.databases.create(
             parent={"type": "page_id", "page_id": page_id},
             title=rich_text("Places to Go 🦮"),
             icon={"type": "emoji", "emoji": "📍"},
             is_inline=True,
-            properties={
-                "Name": {"title": {}},
-                "Location": {"rich_text": {}},
-                "Type": {
-                    "select": {
-                        "options": [
-                            select_option("Beach", "blue"),
-                            select_option("Park", "green"),
-                            select_option("City", "purple"),
-                            select_option("Trail", "brown"),
-                            select_option("Cafe", "orange"),
-                            select_option("Other", "gray"),
-                        ]
-                    }
-                },
-                "Distance": {"number": {"format": "number"}},
-                "Cost": {"number": {"format": "dollar"}},
-                "Link": {"url": {}},
-                "Rating": {"number": {"format": "number"}},
-            },
+            properties=properties,
         )
-        return db["id"]
+        db_id = db["id"]
+        self._ensure_custom_properties(db_id, properties)
+        return db_id
 
     def seed_places(self, db_id: str) -> None:
+        data_source_id = self._get_data_source_id(db_id)
+        title_key = self._get_title_property_name(db_id)
         for name, loc, ptype, dist, cost, link, rating in PLACES_ENTRIES:
             self.notion.pages.create(
-                parent={"type": "database_id", "database_id": db_id},
+                parent={"data_source_id": data_source_id},
                 properties={
-                    "Name": {"title": rich_text(name)},
+                    title_key: {"title": rich_text(name)},
                     "Location": {"rich_text": rich_text(loc)},
                     "Type": {"select": {"name": ptype}},
                     "Distance": {"number": dist},
@@ -264,63 +313,68 @@ class SummerPlannerBuilder:
         print(f"  ✓ Seeded {len(PLACES_ENTRIES)} places.")
 
     def create_bucket_list_db(self, page_id: str) -> str:
+        properties = {
+            "Item": {"title": {}},
+            "Priority": {
+                "select": {
+                    "options": [
+                        select_option("High", "red"),
+                        select_option("Medium", "yellow"),
+                        select_option("Low", "gray"),
+                    ]
+                }
+            },
+            "Category": {
+                "multi_select": {
+                    "options": [
+                        select_option("Travel", "blue"),
+                        select_option("Adventure", "orange"),
+                        select_option("Chill", "green"),
+                        select_option("Fitness", "red"),
+                        select_option("Creative", "purple"),
+                        select_option("Social", "pink"),
+                    ]
+                }
+            },
+            "Status": {
+                "select": {
+                    "options": [
+                        select_option("Not Started", "gray"),
+                        select_option("In Progress", "yellow"),
+                        select_option("Done", "green"),
+                    ]
+                }
+            },
+            "People": {
+                "multi_select": {
+                    "options": [
+                        select_option("Solo", "gray"),
+                        select_option("You + BF", "pink"),
+                        select_option("Friends", "purple"),
+                        select_option("Family", "green"),
+                    ]
+                }
+            },
+        }
         db = self.notion.databases.create(
             parent={"type": "page_id", "page_id": page_id},
             title=rich_text("Bucket List 👽"),
             icon={"type": "emoji", "emoji": "✅"},
             is_inline=True,
-            properties={
-                "Item": {"title": {}},
-                "Priority": {
-                    "select": {
-                        "options": [
-                            select_option("High", "red"),
-                            select_option("Medium", "yellow"),
-                            select_option("Low", "gray"),
-                        ]
-                    }
-                },
-                "Category": {
-                    "multi_select": {
-                        "options": [
-                            select_option("Travel", "blue"),
-                            select_option("Adventure", "orange"),
-                            select_option("Chill", "green"),
-                            select_option("Fitness", "red"),
-                            select_option("Creative", "purple"),
-                            select_option("Social", "pink"),
-                        ]
-                    }
-                },
-                "Status": {
-                    "select": {
-                        "options": [
-                            select_option("Not Started", "gray"),
-                            select_option("In Progress", "yellow"),
-                            select_option("Done", "green"),
-                        ]
-                    }
-                },
-                "People": {
-                    "multi_select": {
-                        "options": [
-                            select_option("Solo", "gray"),
-                            select_option("You + BF", "pink"),
-                            select_option("Friends", "purple"),
-                            select_option("Family", "green"),
-                        ]
-                    }
-                },
-            },
+            properties=properties,
         )
-        return db["id"]
+        db_id = db["id"]
+        self._ensure_custom_properties(db_id, properties)
+        return db_id
 
     def seed_bucket_list(self, db_id: str) -> None:
+        data_source_id = self._get_data_source_id(db_id)
+        title_key = self._get_title_property_name(db_id)
         for item, priority, cats, status, people in BUCKET_LIST_ENTRIES:
             self.notion.pages.create(
-                parent={"type": "database_id", "database_id": db_id},
+                parent={"data_source_id": data_source_id},
                 properties={
-                    "Item": {"title": rich_text(item)},
+                    title_key: {"title": rich_text(item)},
                     "Priority": {"select": {"name": priority}},
                     "Category": {"multi_select": [{"name": c} for c in cats]},
                     "Status": {"select": {"name": status}},
@@ -330,59 +384,62 @@ class SummerPlannerBuilder:
         print(f"  ✓ Seeded {len(BUCKET_LIST_ENTRIES)} bucket list items.")
 
     def create_budget_db(self, page_id: str) -> str:
+        properties = {
+            "Item": {"title": {}},
+            "Category": {
+                "select": {
+                    "options": [
+                        select_option("Travel", "blue"),
+                        select_option("Gear", "orange"),
+                        select_option("Tickets", "purple"),
+                        select_option("Food", "green"),
+                        select_option("Other", "gray"),
+                    ]
+                }
+            },
+            "Planned Amount": {"number": {"format": "dollar"}},
+            "Actual": {"number": {"format": "dollar"}},
+            "Remaining": {"formula": {"expression": 'prop("Planned Amount") - prop("Actual")'}},
+            "Trip / Outing": {
+                "select": {
+                    "options": [
+                        select_option("San Diego Day Trip", "blue"),
+                        select_option("Beach Weekend", "yellow"),
+                        select_option("Staycation Week", "green"),
+                        select_option("General", "gray"),
+                    ]
+                }
+            },
+            "Cost Level": {
+                "select": {
+                    "options": [
+                        select_option("Free", "green"),
+                        select_option("$", "yellow"),
+                        select_option("$$", "orange"),
+                        select_option("$$$", "red"),
+                    ]
+                }
+            },
+        }
         db = self.notion.databases.create(
             parent={"type": "page_id", "page_id": page_id},
             title=rich_text("Budget Tracker 🫧"),
             icon={"type": "emoji", "emoji": "💰"},
             is_inline=True,
-            properties={
-                "Item": {"title": {}},
-                "Category": {
-                    "select": {
-                        "options": [
-                            select_option("Travel", "blue"),
-                            select_option("Gear", "orange"),
-                            select_option("Tickets", "purple"),
-                            select_option("Food", "green"),
-                            select_option("Other", "gray"),
-                        ]
-                    }
-                },
-                "Planned Amount": {"number": {"format": "dollar"}},
-                "Actual": {"number": {"format": "dollar"}},
-                "Remaining": {
-                    "formula": {"expression": 'prop("Planned Amount") - prop("Actual")'}
-                },
-                "Trip / Outing": {
-                    "select": {
-                        "options": [
-                            select_option("San Diego Day Trip", "blue"),
-                            select_option("Beach Weekend", "yellow"),
-                            select_option("Staycation Week", "green"),
-                            select_option("General", "gray"),
-                        ]
-                    }
-                },
-                "Cost Level": {
-                    "select": {
-                        "options": [
-                            select_option("Free", "green"),
-                            select_option("$", "yellow"),
-                            select_option("$$", "orange"),
-                            select_option("$$$", "red"),
-                        ]
-                    }
-                },
-            },
+            properties=properties,
         )
-        return db["id"]
+        db_id = db["id"]
+        self._ensure_custom_properties(db_id, properties)
+        return db_id
 
     def seed_budget(self, db_id: str) -> None:
+        data_source_id = self._get_data_source_id(db_id)
+        title_key = self._get_title_property_name(db_id)
         for item, cat, planned, actual, trip, cost_level in BUDGET_ENTRIES:
             self.notion.pages.create(
-                parent={"type": "database_id", "database_id": db_id},
+                parent={"data_source_id": data_source_id},
                 properties={
-                    "Item": {"title": rich_text(item)},
+                    title_key: {"title": rich_text(item)},
                     "Category": {"select": {"name": cat}},
                     "Planned Amount": {"number": planned},
                     "Actual": {"number": actual},
@@ -393,37 +450,42 @@ class SummerPlannerBuilder:
         print(f"  ✓ Seeded {len(BUDGET_ENTRIES)} budget entries.")
 
     def create_highlights_db(self, page_id: str) -> str:
+        properties = {
+            "Title": {"title": {}},
+            "Date": {"date": {}},
+            "People": {
+                "multi_select": {
+                    "options": [
+                        select_option("Solo", "gray"),
+                        select_option("You + BF", "pink"),
+                        select_option("Friends", "purple"),
+                        select_option("Family", "green"),
+                    ]
+                }
+            },
+            "Location": {"rich_text": {}},
+            "Rating": {"number": {"format": "number"}},
+            "Notes": {"rich_text": {}},
+        }
         db = self.notion.databases.create(
             parent={"type": "page_id", "page_id": page_id},
             title=rich_text("Summer Highlights 🐶"),
             icon={"type": "emoji", "emoji": "⭐"},
             is_inline=True,
-            properties={
-                "Title": {"title": {}},
-                "Date": {"date": {}},
-                "People": {
-                    "multi_select": {
-                        "options": [
-                            select_option("Solo", "gray"),
-                            select_option("You + BF", "pink"),
-                            select_option("Friends", "purple"),
-                            select_option("Family", "green"),
-                        ]
-                    }
-                },
-                "Location": {"rich_text": {}},
-                "Rating": {"number": {"format": "number"}},
-                "Notes": {"rich_text": {}},
-            },
+            properties=properties,
         )
-        return db["id"]
+        db_id = db["id"]
+        self._ensure_custom_properties(db_id, properties)
+        return db_id
 
     def seed_highlights(self, db_id: str) -> None:
+        data_source_id = self._get_data_source_id(db_id)
+        title_key = self._get_title_property_name(db_id)
         for title, date, people, loc, rating, notes in HIGHLIGHTS_ENTRIES:
             self.notion.pages.create(
-                parent={"type": "database_id", "database_id": db_id},
+                parent={"data_source_id": data_source_id},
                 properties={
-                    "Title": {"title": rich_text(title)},
+                    title_key: {"title": rich_text(title)},
                     "Date": {"date": {"start": date}},
                     "People": {"multi_select": [{"name": p} for p in people]},
                     "Location": {"rich_text": rich_text(loc)},
@@ -434,8 +496,6 @@ class SummerPlannerBuilder:
         print(f"  ✓ Seeded {len(HIGHLIGHTS_ENTRIES)} highlight entries.")
 
     def create_linked_view(self, page_id: str, database_id: str) -> None:
-        # linked_to_database insertion is not consistently supported by the public API.
-        # Add a plain URL reference to avoid noisy validation errors.
         notion_url = f"https://www.notion.so/{database_id.replace('-', '')}"
         self.notion.blocks.children.append(
             block_id=page_id,
@@ -604,7 +664,7 @@ class SummerPlannerBuilder:
             print(f"  ⚠  Dashboard build error: {format_api_error(exc)}")
 
         print("\n" + "=" * 60)
-        print("Summer 2026 Planner created successfully! YAY!")
+        print("✅ Summer 2026 Planner created successfully!")
         print("=" * 60)
         print(f"\nMain page ID: {main_page_id}")
         for key, val in db_ids.items():
