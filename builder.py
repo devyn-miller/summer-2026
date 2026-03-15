@@ -30,6 +30,12 @@ from sample_data import (
 )
 
 
+def format_api_error(exc: APIResponseError) -> str:
+    """Return a stable error string across notion-client versions."""
+    code = getattr(exc, "code", "unknown_error")
+    return f"{code}: {exc}"
+
+
 class SummerPlannerBuilder:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -476,7 +482,7 @@ class SummerPlannerBuilder:
                 )
                 print(f"  ✓ {label} relation added")
             except APIResponseError as exc:
-                print(f"  ⚠ {label} relation failed: {exc.code} - {exc.message}")
+                print(f"  ⚠ {label} relation failed: {format_api_error(exc)}")
 
     def build_dashboard(self, page_id: str, db_ids: dict[str, str]) -> None:
         top_blocks = [
@@ -539,7 +545,11 @@ class SummerPlannerBuilder:
         try:
             main_page_id = self.create_main_page()
         except APIResponseError as exc:
-            print(f"Fatal: could not create main page - {exc.code}: {exc.message}")
+            print(f"Fatal: could not create main page - {format_api_error(exc)}")
+            print(
+                "Tip: verify PARENT_PAGE_ID and confirm that page is shared with "
+                "your Notion integration."
+            )
             return 1
 
         db_ids: dict[str, str | None] = {}
@@ -558,7 +568,7 @@ class SummerPlannerBuilder:
                 print(f"  ✓ {key.replace('_', ' ').title()} created")
                 time.sleep(0.4)
             except APIResponseError as exc:
-                print(f"  ⚠  {key} creation failed: {exc.code} - {exc.message}")
+                print(f"  ⚠  {key} creation failed: {format_api_error(exc)}")
                 db_ids[key] = None
 
         print("\nSeeding sample data ...")
@@ -603,7 +613,7 @@ class SummerPlannerBuilder:
         try:
             self.build_dashboard(main_page_id, {k: v or "" for k, v in db_ids.items()})
         except APIResponseError as exc:
-            print(f"  ⚠  Dashboard build error: {exc.code} - {exc.message}")
+            print(f"  ⚠  Dashboard build error: {format_api_error(exc)}")
 
         print("\n" + "=" * 60)
         print("Summer 2026 Planner created successfully! YAY!")
