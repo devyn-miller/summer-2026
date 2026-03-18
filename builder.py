@@ -12,6 +12,8 @@ from notion_helpers import (
     append_blocks,
     bulleted_block,
     callout_block,
+    column_list_block,
+    db_view_block,
     divider_block,
     heading_block,
     paragraph_block,
@@ -69,6 +71,38 @@ class SummerPlannerBuilder:
         data_source_id = self._get_data_source_id(db_id)
         self.notion.data_sources.update(data_source_id=data_source_id, properties=custom_only)
 
+    def _create_db(
+        self,
+        page_id: str,
+        title: str,
+        icon_emoji: str,
+        properties: dict[str, Any],
+        views: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "parent": {"type": "page_id", "page_id": page_id},
+            "title": rich_text(title),
+            "icon": {"type": "emoji", "emoji": icon_emoji},
+            "is_inline": True,
+            "properties": properties,
+        }
+        if views:
+            payload["views"] = views
+        try:
+            return self.notion.databases.create(**payload)
+        except APIResponseError as exc:
+            if not views:
+                raise
+            print(f"  ⚠  Views unsupported for {title}, retrying without views: {format_api_error(exc)}")
+            fallback_payload = {
+                "parent": payload["parent"],
+                "title": payload["title"],
+                "icon": payload["icon"],
+                "is_inline": payload["is_inline"],
+                "properties": payload["properties"],
+            }
+            return self.notion.databases.create(**fallback_payload)
+
     def create_main_page(self) -> str:
         print("Creating main page: Summer 2026 Planner ...")
         response = self.notion.pages.create(
@@ -80,6 +114,33 @@ class SummerPlannerBuilder:
         page_id = response["id"]
         print(f"  ✓ Main page created - ID: {page_id}")
         return page_id
+
+    def create_calendar_hub_page(self, parent_page_id: str) -> str:
+        print("Creating Calendar Hub page ...")
+        response = self.notion.pages.create(
+            parent={"type": "page_id", "page_id": parent_page_id},
+            icon={"type": "emoji", "emoji": "📅"},
+            properties={"title": {"title": rich_text("Calendar Hub 📅")}},
+        )
+        calendar_hub_id = response["id"]
+        intro_blocks = [
+            heading_block(2, "Calendar Hub 📅"),
+            callout_block("Interlinked calendar views for planning, activities, and highlights."),
+            column_list_block(
+                [
+                    bulleted_block("Master Calendar: table + calendar + timeline"),
+                    bulleted_block("Activities: board by status + calendar by start date"),
+                ],
+                [
+                    bulleted_block("Highlights: calendar + gallery for memories"),
+                    bulleted_block("All linked back through shared relations"),
+                ],
+            ),
+            divider_block(),
+        ]
+        append_blocks(self.notion, calendar_hub_id, intro_blocks)
+        print(f"  ✓ Calendar Hub page created - ID: {calendar_hub_id}")
+        return calendar_hub_id
 
     def create_master_calendar(self, page_id: str) -> str:
         properties = {
@@ -97,12 +158,16 @@ class SummerPlannerBuilder:
             "Assigned To": {"people": {}},
             "Notes": {"rich_text": {}},
         }
-        db = self.notion.databases.create(
-            parent={"type": "page_id", "page_id": page_id},
-            title=rich_text("Master Calendar 🕓"),
-            icon={"type": "emoji", "emoji": "📅"},
-            is_inline=True,
+        db = self._create_db(
+            page_id=page_id,
+            title="Master Calendar 🕓",
+            icon_emoji="📅",
             properties=properties,
+            views=[
+                db_view_block("table"),
+                db_view_block("calendar", "Date Range"),
+                db_view_block("timeline", "Date Range"),
+            ],
         )
         db_id = db["id"]
         self._ensure_custom_properties(db_id, properties)
@@ -164,23 +229,28 @@ class SummerPlannerBuilder:
                     ]
                 }
             },
+            "Start Date": {"date": {}},
             "People": {
                 "multi_select": {
                     "options": [
                         select_option("Solo", "gray"),
-                        select_option("You + BF", "pink"),
+                        select_option("Both of us", "pink"),
                         select_option("Friends", "purple"),
                         select_option("Family", "green"),
                     ]
                 }
             },
         }
-        db = self.notion.databases.create(
-            parent={"type": "page_id", "page_id": page_id},
-            title=rich_text("Activities 🔥"),
-            icon={"type": "emoji", "emoji": "🏃"},
-            is_inline=True,
+        db = self._create_db(
+            page_id=page_id,
+            title="Activities 🔥",
+            icon_emoji="🏃",
             properties=properties,
+            views=[
+                db_view_block("table"),
+                db_view_block("board", "Status"),
+                db_view_block("calendar", "Start Date"),
+            ],
         )
         db_id = db["id"]
         self._ensure_custom_properties(db_id, properties)
@@ -189,7 +259,7 @@ class SummerPlannerBuilder:
     def seed_activities(self, db_id: str) -> None:
         data_source_id = self._get_data_source_id(db_id)
         title_key = self._get_title_property_name(db_id)
-        for name, atype, dur, cost, status, energy, weather, people in ACTIVITIES_ENTRIES:
+        for name, atype, dur, cost, status, energy, weather, people, start_date in ACTIVITIES_ENTRIES:
             self.notion.pages.create(
                 parent={"data_source_id": data_source_id},
                 properties={
@@ -200,6 +270,7 @@ class SummerPlannerBuilder:
                     "Status": {"select": {"name": status}},
                     "Energy": {"select": {"name": energy}},
                     "Weather": {"select": {"name": weather}},
+                    "Start Date": {"date": {"start": start_date}},
                     "People": {"multi_select": [{"name": p} for p in people]},
                 },
             )
@@ -218,8 +289,8 @@ class SummerPlannerBuilder:
             "Person": {
                 "select": {
                     "options": [
-                        select_option("You", "green"),
-                        select_option("BF (TBD)", "purple"),
+                        select_option("Devyn", "green"),
+                        select_option("Connor", "purple"),
                     ]
                 }
             },
@@ -235,12 +306,15 @@ class SummerPlannerBuilder:
             },
             "Conflicts": {"rich_text": {}},
         }
-        db = self.notion.databases.create(
-            parent={"type": "page_id", "page_id": page_id},
-            title=rich_text("Availability 4️⃣"),
-            icon={"type": "emoji", "emoji": "📆"},
-            is_inline=True,
+        db = self._create_db(
+            page_id=page_id,
+            title="Availability 4️⃣",
+            icon_emoji="📆",
             properties=properties,
+            views=[
+                db_view_block("table"),
+                db_view_block("board", "Week"),
+            ],
         )
         db_id = db["id"]
         self._ensure_custom_properties(db_id, properties)
@@ -283,12 +357,15 @@ class SummerPlannerBuilder:
             "Link": {"url": {}},
             "Rating": {"number": {"format": "number"}},
         }
-        db = self.notion.databases.create(
-            parent={"type": "page_id", "page_id": page_id},
-            title=rich_text("Places to Go 🦮"),
-            icon={"type": "emoji", "emoji": "📍"},
-            is_inline=True,
+        db = self._create_db(
+            page_id=page_id,
+            title="Places to Go 🦮",
+            icon_emoji="📍",
             properties=properties,
+            views=[
+                db_view_block("table"),
+                db_view_block("gallery"),
+            ],
         )
         db_id = db["id"]
         self._ensure_custom_properties(db_id, properties)
@@ -345,23 +422,27 @@ class SummerPlannerBuilder:
                     ]
                 }
             },
+            "Due Date": {"date": {}},
             "People": {
                 "multi_select": {
                     "options": [
                         select_option("Solo", "gray"),
-                        select_option("You + BF", "pink"),
+                        select_option("Both of us", "pink"),
                         select_option("Friends", "purple"),
                         select_option("Family", "green"),
                     ]
                 }
             },
         }
-        db = self.notion.databases.create(
-            parent={"type": "page_id", "page_id": page_id},
-            title=rich_text("Bucket List 👽"),
-            icon={"type": "emoji", "emoji": "✅"},
-            is_inline=True,
+        db = self._create_db(
+            page_id=page_id,
+            title="Bucket List 👽",
+            icon_emoji="✅",
             properties=properties,
+            views=[
+                db_view_block("table"),
+                db_view_block("board", "Status"),
+            ],
         )
         db_id = db["id"]
         self._ensure_custom_properties(db_id, properties)
@@ -370,7 +451,7 @@ class SummerPlannerBuilder:
     def seed_bucket_list(self, db_id: str) -> None:
         data_source_id = self._get_data_source_id(db_id)
         title_key = self._get_title_property_name(db_id)
-        for item, priority, cats, status, people in BUCKET_LIST_ENTRIES:
+        for item, priority, cats, status, people, due_date in BUCKET_LIST_ENTRIES:
             self.notion.pages.create(
                 parent={"data_source_id": data_source_id},
                 properties={
@@ -378,6 +459,7 @@ class SummerPlannerBuilder:
                     "Priority": {"select": {"name": priority}},
                     "Category": {"multi_select": [{"name": c} for c in cats]},
                     "Status": {"select": {"name": status}},
+                    "Due Date": {"date": {"start": due_date}},
                     "People": {"multi_select": [{"name": p} for p in people]},
                 },
             )
@@ -457,7 +539,7 @@ class SummerPlannerBuilder:
                 "multi_select": {
                     "options": [
                         select_option("Solo", "gray"),
-                        select_option("You + BF", "pink"),
+                        select_option("Both of us", "pink"),
                         select_option("Friends", "purple"),
                         select_option("Family", "green"),
                     ]
@@ -467,12 +549,16 @@ class SummerPlannerBuilder:
             "Rating": {"number": {"format": "number"}},
             "Notes": {"rich_text": {}},
         }
-        db = self.notion.databases.create(
-            parent={"type": "page_id", "page_id": page_id},
-            title=rich_text("Summer Highlights 🐶"),
-            icon={"type": "emoji", "emoji": "⭐"},
-            is_inline=True,
+        db = self._create_db(
+            page_id=page_id,
+            title="Summer Highlights 🐶",
+            icon_emoji="⭐",
             properties=properties,
+            views=[
+                db_view_block("table"),
+                db_view_block("gallery"),
+                db_view_block("calendar", "Date"),
+            ],
         )
         db_id = db["id"]
         self._ensure_custom_properties(db_id, properties)
@@ -535,7 +621,7 @@ class SummerPlannerBuilder:
             except APIResponseError as exc:
                 print(f"  ⚠ {label} relation failed: {format_api_error(exc)}")
 
-    def build_dashboard(self, page_id: str, db_ids: dict[str, str]) -> None:
+    def build_dashboard(self, page_id: str, db_ids: dict[str, str], calendar_hub_id: str) -> None:
         top_blocks = [
             heading_block(1, "Summer 2026 Dashboard 🦆"),
             callout_block(
@@ -556,13 +642,19 @@ class SummerPlannerBuilder:
         ]
         append_blocks(self.notion, page_id, top_blocks)
 
+        calendar_hub_url = f"https://www.notion.so/{calendar_hub_id.replace('-', '')}"
+        calendar_hub_blocks = [
+            heading_block(2, "Calendar Hub 📅"),
+            callout_block("Use the linked Calendar Hub for interlinked calendar and timeline planning."),
+            paragraph_block(f"Open Calendar Hub: {calendar_hub_url}"),
+            divider_block(),
+        ]
+        append_blocks(self.notion, page_id, calendar_hub_blocks)
+
         section_map = [
-            ("Planning & Schedule 🕓", "Master Calendar 🕓", db_ids.get("master_calendar", "")),
             ("Planning & Schedule 🕓", "Availability 4️⃣", db_ids.get("availability", "")),
-            ("Activities & Bucket List 🔥", "Activities 🔥", db_ids.get("activities", "")),
             ("Activities & Bucket List 🔥", "Bucket List 👽", db_ids.get("bucket_list", "")),
             ("Places & Ideas 🦮", "Places to Go 🦮", db_ids.get("places", "")),
-            ("Summer Highlights 🐶", "Summer Highlights 🐶", db_ids.get("highlights", "")),
             ("Budget Overview 🫧", "Budget Tracker 🫧", db_ids.get("budget", "")),
         ]
 
@@ -600,19 +692,25 @@ class SummerPlannerBuilder:
             )
             return 1
 
+        try:
+            calendar_hub_id = self.create_calendar_hub_page(main_page_id)
+        except APIResponseError as exc:
+            print(f"Fatal: could not create Calendar Hub page - {format_api_error(exc)}")
+            return 1
+
         db_ids: dict[str, str | None] = {}
-        creation_steps: list[tuple[str, Any]] = [
-            ("master_calendar", self.create_master_calendar),
-            ("activities", self.create_activities_db),
-            ("availability", self.create_availability_db),
-            ("places", self.create_places_db),
-            ("bucket_list", self.create_bucket_list_db),
-            ("budget", self.create_budget_db),
-            ("highlights", self.create_highlights_db),
+        creation_steps: list[tuple[str, Any, str]] = [
+            ("master_calendar", self.create_master_calendar, calendar_hub_id),
+            ("activities", self.create_activities_db, calendar_hub_id),
+            ("availability", self.create_availability_db, main_page_id),
+            ("places", self.create_places_db, main_page_id),
+            ("bucket_list", self.create_bucket_list_db, main_page_id),
+            ("budget", self.create_budget_db, main_page_id),
+            ("highlights", self.create_highlights_db, calendar_hub_id),
         ]
-        for key, fn in creation_steps:
+        for key, fn, parent_id in creation_steps:
             try:
-                db_ids[key] = fn(main_page_id)
+                db_ids[key] = fn(parent_id)
                 print(f"  ✓ {key.replace('_', ' ').title()} created")
                 time.sleep(0.4)
             except APIResponseError as exc:
@@ -659,7 +757,11 @@ class SummerPlannerBuilder:
             print("  ⚠  Skipping relations - one or more databases failed to create.")
 
         try:
-            self.build_dashboard(main_page_id, {k: v or "" for k, v in db_ids.items()})
+            self.build_dashboard(
+                main_page_id,
+                {k: v or "" for k, v in db_ids.items()},
+                calendar_hub_id,
+            )
         except APIResponseError as exc:
             print(f"  ⚠  Dashboard build error: {format_api_error(exc)}")
 

@@ -58,6 +58,47 @@ def bulleted_block(text: str) -> dict[str, Any]:
     }
 
 
+def db_view_block(view_type: str, db_property: str = "") -> dict[str, Any]:
+    """Return a Notion database view payload for databases.create()."""
+    normalized = view_type.lower()
+    if normalized == "table":
+        return {"type": "table", "name": "Table"}
+    if normalized == "calendar":
+        return {"type": "calendar", "name": "Calendar", "calendar": {"date": db_property}}
+    if normalized == "timeline":
+        return {"type": "timeline", "name": "Timeline", "timeline": {"date": db_property}}
+    if normalized == "board":
+        return {"type": "board", "name": "Board", "board": {"group_by": db_property}}
+    if normalized == "gallery":
+        return {"type": "gallery", "name": "Gallery"}
+    raise ValueError(f"Unsupported database view type: {view_type}")
+
+
+def column_list_block(
+    col_a_blocks: list[dict[str, Any]],
+    col_b_blocks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    # Notion expects nested children under column_list and each column payload.
+    return {
+        "object": "block",
+        "type": "column_list",
+        "column_list": {
+            "children": [
+                {
+                    "object": "block",
+                    "type": "column",
+                    "column": {"children": col_a_blocks},
+                },
+                {
+                    "object": "block",
+                    "type": "column",
+                    "column": {"children": col_b_blocks},
+                },
+            ]
+        },
+    }
+
+
 def append_blocks(notion: Any, page_id: str, blocks: list[dict[str, Any]]) -> None:
     """Append blocks in batches of 100 (API limit)."""
     for i in range(0, len(blocks), 100):
